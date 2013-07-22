@@ -14,21 +14,36 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import tornado.auth
-import tornado.escape
 import tornado.httpclient
-import tornado.httputil
 
+from tornado.auth import OAuth2Mixin, _auth_return_future, AuthError
+from tornado.escape import to_basestring, parse_qs_bytes, native_str
 from tornado.log import gen_log
+from tornado.httputil import url_concat
+from tornado.util import ObjectDict
 
-class GithubMixin(tornado.auth.OAuth2Mixin):
+try:
+    import ujson as json
+except ImportError:
+    try:
+        import simplejson as json
+    except ImportError:
+        import json
+
+def json_encode(value):
+    return json.dumps(value).replace("</", "<\\/")
+
+def json_decode(value):
+    return json.loads(to_basestring(value))
+
+class GithubMixin(OAuth2Mixin):
     """Github authentication using OAuth2."""
 
     _OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
     _OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
     _GITHUB_API_URL = "https://api.github.com"
 
-    @tornado.auth._auth_return_future
+    @_auth_return_future
     def get_authenticated_user(self, redirect_uri, client_id, client_secret,
                                code, callback, extra_fields=None):
         """Handles the login for the Github user, queries /user
@@ -77,41 +92,38 @@ class GithubMixin(tornado.auth.OAuth2Mixin):
                          future, fields, response):
         if response.error:
             future.set_exception(
-                tornado.auth.AuthError('Github auth error: %s' % str(response)))
+                AuthError("Github auth error: %s" % str(response)))
             return
 
-        args = tornado.escape.parse_qs_bytes(
-            tornado.escape.native_str(response.body))
+        args = parse_qs_bytes(native_str(response.body))
 
-        if 'error' in args:
+        if "error" in args:
             future.set_exception(
-                tornado.auth.AuthError('Github auth error: %s' % args['error'][-1]))
+                AuthError("Github auth error: %s" % args["error"][-1]))
             return
 
         session = {
             "access_token": args["access_token"][-1],
         }
 
-        self.github_request(
-            path="/user",
-            callback=self.async_callback(self._on_get_user_info,
-                                         future, session, fields),
-            access_token=session["access_token"]
-        )
+        self.github_request(path="/user",
+                            callback=self.async_callback(
+                                self._on_get_user_info, future, session, fields),
+                            access_token=session["access_token"])
 
-    def _on_get_user_info(self, future, session, fields, user):
-        if user is None:
+    def _on_get_user_info(self, future, session, fields, res):
+        if res.body is None:
             future.set_result(None)
             return
 
         fieldmap = {}
         for field in fields:
-            fieldmap[field] = user.get(field)
+            fieldmap[field] = res.body.get(field)
 
         fieldmap.update({"access_token": session["access_token"]})
         future.set_result(fieldmap)
 
-    @tornado.auth._auth_return_future
+    @_auth_return_future
     def github_request(self, path, callback, access_token=None,
                        method="GET", body=None, **args):
         """Fetches the given relative API path, e.g., "/user/starred"
@@ -139,29 +151,32 @@ class GithubMixin(tornado.auth.OAuth2Mixin):
         all_args.update(args)
 
         if all_args:
-            url = tornado.httputil.url_concat(url, all_args)
+            url = url_concat(url, all_args)
 
         callback = self.async_callback(self._on_github_request, callback)
 
         http = self.get_auth_http_client()
         if body is not None:
-            body = tornado.escape.json_encode(body)
+            body = json_encode(body)
         http.fetch(url, callback=callback, method=method, body=body)
 
     def _on_github_request(self, future, response):
         """ Parse the JSON from the API """
         if response.error:
             future.set_exception(
-                tornado.auth.AuthError("Error response %s fetching %s" %
-                                       (response.error, response.request.url)))
+                AuthError("Error response %s fetching %s" %
+                          (response.error, response.request.url)))
             return
+
+        result = ObjectDict(code=response.code, headers=response.headers, body=None)
+
         try:
-            json = tornado.escape.json_decode(response.body)
+            result.body = json_decode(response.body)
         except Exception:
             gen_log.warning("Invalid JSON from Github: %r", response.body)
-            future.set_result(None)
+            future.set_result(result)
             return
-        future.set_result(json)
+        future.set_result(result)
 
     def get_auth_http_client(self):
         """Returns the `.AsyncHTTPClient` instance to be used for auth requests.
@@ -170,3 +185,15 @@ class GithubMixin(tornado.auth.OAuth2Mixin):
         the default.
         """
         return tornado.httpclient.AsyncHTTPClient()
+
+def parse_link(link):
+    linkmap = {}
+    for s in link.split(","):
+        s = s.strip();
+        linkmap[s[-5:-1]] = s.split(";")[0].rstrip()[1:-1]
+    return linkmap
+
+def get_last_page_num(link):
+    linkmap = parse_link(link)
+    i = linkmap["last"].find("page=")
+    return linkmap["last"][i+5:]
