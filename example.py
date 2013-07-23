@@ -77,7 +77,7 @@ class StarsHandler(BaseHandler, torngithub.GithubMixin):
     @tornado.gen.coroutine
     def get(self):
         res = yield self.github_request(
-            '/user/starred', access_token=self.current_user['access_token'])
+            '/user/starred?page=1&per_page=100', access_token=self.current_user['access_token'])
         log.info(torngithub.parse_link(res.headers['Link']))
         log.info(torngithub.get_last_page_num(res.headers['Link']))
         stars = res.body

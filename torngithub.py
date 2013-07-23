@@ -14,6 +14,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import re
 import tornado.httpclient
 
 from tornado.auth import OAuth2Mixin, _auth_return_future, AuthError
@@ -195,5 +196,5 @@ def parse_link(link):
 
 def get_last_page_num(link):
     linkmap = parse_link(link)
-    i = linkmap["last"].find("page=")
-    return linkmap["last"][i+5:]
+    matches = re.search(r"page=(\d+)", linkmap["last"])
+    return int(matches.group(1))
