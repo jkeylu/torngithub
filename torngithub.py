@@ -15,6 +15,7 @@
 # under the License.
 
 import re
+import functools
 import tornado.httpclient
 
 from tornado.auth import OAuth2Mixin, _auth_return_future, AuthError
@@ -22,6 +23,7 @@ from tornado.escape import to_basestring, parse_qs_bytes, native_str
 from tornado.log import gen_log
 from tornado.httputil import url_concat
 from tornado.util import ObjectDict
+from tornado.concurrent import chain_future
 
 try:
     import ujson as json
@@ -37,12 +39,13 @@ def json_encode(value):
 def json_decode(value):
     return json.loads(to_basestring(value))
 
+GITHUB_API_URL = "https://api.github.com"
+
 class GithubMixin(OAuth2Mixin):
     """Github authentication using OAuth2."""
 
     _OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
     _OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-    _GITHUB_API_URL = "https://api.github.com"
 
     @_auth_return_future
     def get_authenticated_user(self, redirect_uri, client_id, client_secret,
@@ -144,40 +147,9 @@ class GithubMixin(OAuth2Mixin):
                     self.write(str(stars))
                     self.finish()
         """
-        url = self._GITHUB_API_URL + path
-
-        all_args = {}
-        if access_token:
-            all_args["access_token"] = access_token
-        all_args.update(args)
-
-        if all_args:
-            url = url_concat(url, all_args)
-
-        callback = self.async_callback(self._on_github_request, callback)
-
-        http = self.get_auth_http_client()
-        if body is not None:
-            body = json_encode(body)
-        http.fetch(url, callback=callback, method=method, body=body)
-
-    def _on_github_request(self, future, response):
-        """ Parse the JSON from the API """
-        if response.error:
-            future.set_exception(
-                AuthError("Error response %s fetching %s" %
-                          (response.error, response.request.url)))
-            return
-
-        result = ObjectDict(code=response.code, headers=response.headers, body=None)
-
-        try:
-            result.body = json_decode(response.body)
-        except Exception:
-            gen_log.warning("Invalid JSON from Github: %r", response.body)
-            future.set_result(result)
-            return
-        future.set_result(result)
+        chain_future(github_request(self.get_auth_http_client(),
+                                    path, None, access_token,
+                                    method, body, **args), callback)
 
     def get_auth_http_client(self):
         """Returns the `.AsyncHTTPClient` instance to be used for auth requests.
@@ -186,6 +158,46 @@ class GithubMixin(OAuth2Mixin):
         the default.
         """
         return tornado.httpclient.AsyncHTTPClient()
+
+@_auth_return_future
+def github_request(http_client, path, callback, access_token=None,
+                   method="GET", body=None, **args):
+    url = GITHUB_API_URL + path
+
+    all_args = {}
+    if access_token:
+        all_args["access_token"] = access_token
+    all_args.update(args)
+
+    if all_args:
+        url = url_concat(url, all_args)
+
+    callback = functools.partial(_on_github_request, callback)
+
+    if body is not None:
+        body = json_encode(body)
+    http_client.fetch(url, callback=callback, method=method, body=body)
+
+
+def _on_github_request(future, response):
+    """ Parse the JSON from the API """
+    if response.error:
+        print response.error
+        future.set_exception(
+            AuthError("Error response %s fetching %s" %
+                      (response.error, response.request.url)))
+        return
+
+    result = ObjectDict(code=response.code, headers=response.headers, body=None)
+
+    try:
+        result.body = json_decode(response.body)
+    except Exception:
+        gen_log.warning("Invalid JSON from Github: %r", response.body)
+        future.set_result(result)
+        return
+    future.set_result(result)
+
 
 def parse_link(link):
     linkmap = {}

@@ -16,7 +16,7 @@
 
 import distutils.core
 
-version = '0.1.1'
+version = '0.1.2'
 
 distutils.core.setup(
     name='torngithub',

@@ -3,9 +3,11 @@ import tornado.web
 import tornado.options
 import tornado.gen
 import logging
+import time
 
 from tornado.options import define, options
 from tornado.httputil import url_concat
+from tornado.concurrent import return_future
 
 import torngithub
 from torngithub import json_encode, json_decode
@@ -71,17 +73,42 @@ class GithubLoginHandler(tornado.web.RequestHandler, torngithub.GithubMixin):
             client_id=self.settings["github_client_id"],
             extra_params={"scope": self.settings['github_scope'], "foo":1})
 
+@tornado.gen.coroutine
+def get_my_starts(http_client, access_token):
+    data = []
+
+    first_page = yield torngithub.github_request(
+        http_client, '/user/starred?page=1&per_page=100',
+        access_token=access_token)
+    log.info(first_page.headers['Link'])
+    data.extend(first_page.body)
+    max_pages = torngithub.get_last_page_num(first_page.headers['Link'])
+
+    ress = yield [torngithub.github_request(
+        http_client, '/user/starred?per_page=100&page=' + str(i),
+        access_token=access_token) for i in range(2, max_pages + 1)]
+
+    for res in ress:
+        data.extend(res.body)
+
+    raise tornado.gen.Return(data)
+
 class StarsHandler(BaseHandler, torngithub.GithubMixin):
     @tornado.web.authenticated
     @tornado.web.asynchronous
     @tornado.gen.coroutine
     def get(self):
-        res = yield self.github_request(
-            '/user/starred?page=1&per_page=100', access_token=self.current_user['access_token'])
-        log.info(torngithub.parse_link(res.headers['Link']))
-        log.info(torngithub.get_last_page_num(res.headers['Link']))
-        stars = res.body
-        self.write(json_encode(stars))
+        starttime = time.time()
+        log.info(starttime)
+
+        data = yield get_my_starts(self.get_auth_http_client(),
+                                   self.current_user['access_token'])
+
+        endtime = time.time()
+        log.info(endtime)
+        log.info(endtime - starttime)
+
+        self.write(json_encode(data))
         self.finish()
 
 class LogoutHandler(BaseHandler):
