@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# vim: set fileencoding=utf-8 :
 #
 # Copyright 2013 jKey Lu
 #
@@ -16,7 +17,7 @@
 
 import distutils.core
 
-version = '0.1.2'
+version = '0.1.3'
 
 distutils.core.setup(
     name='torngithub',
