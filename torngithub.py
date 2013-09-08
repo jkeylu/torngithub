@@ -208,5 +208,5 @@ def parse_link(link):
 
 def get_last_page_num(link):
     linkmap = parse_link(link)
-    matches = re.search(r"page=(\d+)", linkmap["last"])
+    matches = re.search(r"[?&]page=(\d+)", linkmap["last"])
     return int(matches.group(1))
