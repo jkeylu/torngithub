@@ -17,6 +17,7 @@
 
 import re
 import functools
+import sys
 import tornado.httpclient
 
 from tornado.auth import OAuth2Mixin, _auth_return_future, AuthError
@@ -33,6 +34,11 @@ except ImportError:
         import simplejson as json
     except ImportError:
         import json
+
+if sys.version_info.major == 2:
+    from urllib import urlencode
+elif sys.version_info.major == 3:
+    from urllib.parse import urlencode
 
 def json_encode(value):
     return json.dumps(value).replace("</", "<\\/")
@@ -53,68 +59,69 @@ class GithubMixin(OAuth2Mixin):
                                code, callback, extra_fields=None):
         """Handles the login for the Github user, queries /user
         and returns a user object
-
         Example usage::
-
             class GithubLoginHandler(LoginHandler, torngithub.GithubMixin):
                 @tornado.web.asynchronous
                 @tornado.gen.coroutine
                 def get(self):
                     if self.get_argument("code", False):
-                        self.get_authenticated_user(
-                            redirect_uri="/auth/github/",
-                            client_id=self.settings["github_client_id"],
-                            client_secret=self.settings["github_client_secret"],
-                            code=self.get_argument("code"),
-                            callback=self.async_callback(self._on_login))
+                        user = yield self.get_authenticated_user(
+                                    redirect_uri="/auth/github/",
+                                    client_id=self.settings["github_client_id"],
+                                    client_secret=self.settings["github_client_secret"],
+                                    code=self.get_argument("code"))
+
+                        # Save the user with e.g. set_secure_cookie
                     else:
-                        self.authorize_redirect(
+                        yield self.authorize_redirect(
                             redirect_uri="/auth/github/",
                             client_id=self.settings["github_client_id"],
                             extra_params={"scope", "user"})
-
-                def _on_login(self, user):
-                    # Save the user with e.g. set_secure_cookie
         """
         http = self.get_auth_http_client()
-        args = {
-            "redirect_uri": redirect_uri,
-            "code": code,
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
 
         fields = set(["id", "login", "name", "email", "avatar_url"])
-
         if extra_fields:
             fields.update(extra_fields)
 
-        http.fetch(self._oauth_request_token_url(**args),
-                   self.async_callback(self._on_access_token, redirect_uri,
-                                       client_id, client_secret, callback, fields))
+        body = urlencode({
+                "redirect_uri": redirect_uri,
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "extra_params": extra_fields
+            })
+
+        http.fetch(self._OAUTH_ACCESS_TOKEN_URL,
+                   functools.partial(self._on_access_token, redirect_uri,
+                                     client_id, client_secret,
+                                     callback, fields),
+                   method="POST", body=body,
+                   headers={'Content-Type': 'application/x-www-form-urlencoded'})
 
     def _on_access_token(self, redirect_uri, client_id, client_secret,
                          future, fields, response):
         if response.error:
-            future.set_exception(
-                AuthError("Github auth error: %s" % str(response)))
+            future.set_exception(AuthError("Github auth error: %s" % str(response)))
             return
 
         args = parse_qs_bytes(native_str(response.body))
-
         if "error" in args:
-            future.set_exception(
-                AuthError("Github auth error: %s" % args["error"][-1]))
+            future.set_exception(AuthError("Github auth error: %s" % args["error"][-1]))
             return
 
+
+        access_token = args["access_token"][-1]
+        if isinstance(access_token, bytes):
+            access_token = access_token.decode()
         session = {
-            "access_token": args["access_token"][-1],
+            "access_token": access_token,
         }
 
         self.github_request(path="/user",
-                            callback=self.async_callback(
-                                self._on_get_user_info, future, session, fields),
-                            access_token=session["access_token"])
+                            callback=functools.partial(self._on_get_user_info,
+                                                       future, session, fields),
+                            access_token=access_token)
 
     def _on_get_user_info(self, future, session, fields, res):
         if res.body is None:
@@ -132,9 +139,7 @@ class GithubMixin(OAuth2Mixin):
     def github_request(self, path, callback, access_token=None,
                        method="GET", body=None, **args):
         """Fetches the given relative API path, e.g., "/user/starred"
-
         Example usage::
-
             class MainHandler(tornado.web.RequestHandler, torngithub.GithubMixin):
                 @tornado.web.authenticated
                 @tornado.web.asynchronous
@@ -143,7 +148,6 @@ class GithubMixin(OAuth2Mixin):
                         "/user/starred",
                         callback=_on_get_user_starred,
                         access_token=self.current_user["access_token"])
-
                 def _on_get_user_starred(self, stars):
                     self.write(str(stars))
                     self.finish()
@@ -154,7 +158,6 @@ class GithubMixin(OAuth2Mixin):
 
     def get_auth_http_client(self):
         """Returns the `.AsyncHTTPClient` instance to be used for auth requests.
-
         May be overriddent by subclasses to use an HTTP client other than
         the default.
         """
@@ -166,8 +169,10 @@ def github_request(http_client, path, callback, access_token=None,
     url = GITHUB_API_URL + path
 
     all_args = {}
+    headers={}
     if access_token:
-        all_args["access_token"] = access_token
+        headers["Authorization"] = "token " + access_token
+
     all_args.update(args)
 
     if all_args:
@@ -177,13 +182,14 @@ def github_request(http_client, path, callback, access_token=None,
 
     if body is not None:
         body = json_encode(body)
-    http_client.fetch(url, callback=callback, method=method, body=body)
+
+    http_client.fetch(url, callback=callback, method=method,
+                      body=body, headers=headers)
 
 
 def _on_github_request(future, response):
     """ Parse the JSON from the API """
     if response.error:
-        print response.error
         future.set_exception(
             AuthError("Error response %s fetching %s" %
                       (response.error, response.request.url)))
@@ -197,17 +203,5 @@ def _on_github_request(future, response):
         gen_log.warning("Invalid JSON from Github: %r", response.body)
         future.set_result(result)
         return
+
     future.set_result(result)
-
-
-def parse_link(link):
-    linkmap = {}
-    for s in link.split(","):
-        s = s.strip();
-        linkmap[s[-5:-1]] = s.split(";")[0].rstrip()[1:-1]
-    return linkmap
-
-def get_last_page_num(link):
-    linkmap = parse_link(link)
-    matches = re.search(r"[?&]page=(\d+)", linkmap["last"])
-    return int(matches.group(1))
