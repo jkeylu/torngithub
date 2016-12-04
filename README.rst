@@ -8,6 +8,14 @@ Installation
 
     pip install torngithub
 
+In Tornado 4.4.2 the default, SimpleAysncHTTPClient, fails with Github OAUTH
+getting HTTP 403 errors when requesting the user information after the log in.
+The Curl based library doesn't so it suggested to use that. To do configure
+the HTTP client at start up:
+
+    tornado.httpclient.AsyncHTTPClient.configure("tornado.curl_httpclient.CurlAsyncHTTPClient")
+
+
 License
 =======
 

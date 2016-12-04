@@ -15,11 +15,13 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import tornado.httpclient
 import tornado.ioloop
 import tornado.web
 import tornado.options
 import tornado.gen
 import logging
+import re
 import time
 
 from tornado.options import define, options
@@ -56,10 +58,9 @@ class MainHandler(BaseHandler, torngithub.GithubMixin):
         else:
             self.write('<a href="'
                        + self.settings["github_callback_path"] + '">Login</a>')
-        
+
 
 class GithubLoginHandler(tornado.web.RequestHandler, torngithub.GithubMixin):
-    @tornado.web.asynchronous
     @tornado.gen.coroutine
     def get(self):
         # we can append next to the redirect uri, so the user gets the
@@ -85,21 +86,34 @@ class GithubLoginHandler(tornado.web.RequestHandler, torngithub.GithubMixin):
             return
 
         # otherwise we need to request an authorization code
-        self.authorize_redirect(
+        yield self.authorize_redirect(
             redirect_uri=redirect_uri,
             client_id=self.settings["github_client_id"],
             extra_params={"scope": self.settings['github_scope'], "foo":1})
 
-@tornado.gen.coroutine
-def get_my_starts(http_client, access_token):
-    data = []
+def parse_link(link):
+    linkmap = {}
+    for s in link.split(","):
+        s = s.strip();
+        linkmap[s[-5:-1]] = s.split(";")[0].rstrip()[1:-1]
+    return linkmap
 
+def get_last_page_num(link):
+    if not link:
+        return 0
+    linkmap = parse_link(link)
+    matches = re.search(r"[?&]page=(\d+)", linkmap["last"])
+    return int(matches.group(1))
+
+@tornado.gen.coroutine
+def get_my_stars(http_client, access_token):
+    data = []
     first_page = yield torngithub.github_request(
         http_client, '/user/starred?page=1&per_page=100',
         access_token=access_token)
-    log.info(first_page.headers['Link'])
+    log.info(first_page.headers.get('Link', ''))
     data.extend(first_page.body)
-    max_pages = torngithub.get_last_page_num(first_page.headers['Link'])
+    max_pages = get_last_page_num(first_page.headers.get('Link', ''))
 
     ress = yield [torngithub.github_request(
         http_client, '/user/starred?per_page=100&page=' + str(i),
@@ -118,8 +132,8 @@ class StarsHandler(BaseHandler, torngithub.GithubMixin):
         starttime = time.time()
         log.info(starttime)
 
-        data = yield get_my_starts(self.get_auth_http_client(),
-                                   self.current_user['access_token'])
+        data = yield get_my_stars(self.get_auth_http_client(),
+                                  self.current_user['access_token'])
 
         endtime = time.time()
         log.info(endtime)
@@ -153,6 +167,8 @@ def main():
         debug=True,
         autoescape=None
     )
+
+    tornado.httpclient.AsyncHTTPClient.configure("tornado.curl_httpclient.CurlAsyncHTTPClient")
 
     application = tornado.web.Application(handlers, **settings)
     application.listen(options.port)
