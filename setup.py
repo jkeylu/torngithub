@@ -27,5 +27,7 @@ distutils.core.setup(
     author_email='jkeylu@gmail.com',
     url='https://github.com/jkeylu/torngithub',
     license='http://www.apache.org/licenses/LICENSE-2.0',
-    description='Github authentication for tornado'
+    description='Github authentication for tornado',
+    install_requires=['tornado',
+                      'pycurl'],
 )

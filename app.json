@@ -1,0 +1,16 @@
+{
+  "name": "torngithub",
+  "description": "Demonstrates the torngithub example",
+  "keywords": [
+    "tornado", "github", "OAuth"
+  ],
+  "repository": "https://github.com/jkeylu/torngithub",
+  "env": {
+    "CLIENT_ID": {
+      "description": "The client ID from the application created at https://github.com/settings/developers",
+    },
+    "CLIENT_SECRET": {
+      "description": "The client secret from the application created at https://github.com/settings/developers",
+    }
+  }
+}
