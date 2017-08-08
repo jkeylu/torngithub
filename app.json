@@ -1,0 +1,8 @@
+{
+  "name": "torngithub",
+  "description": "Demonstrates the torngithub example. You will need to create an application at https://github.com/settings/developers, and define environment variables GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in order to use.",
+  "keywords": [
+    "tornado", "github", "OAuth"
+  ],
+  "repository": "https://github.com/jkeylu/torngithub",
+}
